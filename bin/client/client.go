@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 
 	"example/http-server-go/pkgs/types"
@@ -16,6 +18,23 @@ import (
 )
 
 var URL = "http://localhost:8080"
+
+type RequestConfig struct {
+	RootUrl   string
+	client    http.Client
+	SecretKey string
+}
+
+func (config *RequestConfig) UpdateFromEnv() {
+	if value, ok := os.LookupEnv("SERVER_ROOT_URL"); ok {
+		fmt.Println(value)
+		config.RootUrl = value
+	}
+
+	if value, ok := os.LookupEnv("SERVER_SECRET_KEY"); ok {
+		config.SecretKey = value
+	}
+}
 
 func generateNewAlbum() types.Album {
 	album := types.Album{
@@ -27,17 +46,37 @@ func generateNewAlbum() types.Album {
 	return album
 }
 
-func postAlbum(rootUrl string, album types.Album) (types.Album, error) {
+func postAlbum(requestConfig RequestConfig, album types.Album) (types.Album, error) {
 	jsonData, err := json.Marshal(album)
 	if err != nil {
 		log.Fatal("Error while trying to Marshal the data")
 		return album, err
 	}
 
-	resp, err := http.Post(rootUrl+"/albums", "application/json", bytes.NewBuffer(jsonData))
+	request, err := http.NewRequest("POST", requestConfig.RootUrl+"/albums", bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Fatal("Error while creating request")
+		return album, err
+	}
+
+	request.Header.Add("Content-Type", "application/json")
+	request.Header.Add("Authorization", requestConfig.SecretKey)
+
+	resp, err := requestConfig.client.Do(request)
+
 	if err != nil {
 		log.Fatal("Error while trying to Post the data")
 		return album, err
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		var errorMessage types.ErrorMessage
+		err = json.NewDecoder(resp.Body).Decode(&errorMessage)
+
+		if err != nil {
+			return album, errors.New("error while trying to get albums")
+		}
+		return album, fmt.Errorf("%s", errorMessage.Error)
 	}
 
 	var target types.Album
@@ -51,8 +90,8 @@ func postAlbum(rootUrl string, album types.Album) (types.Album, error) {
 	return target, nil
 }
 
-func postAlbumJson(rootUrl string, album types.Album) (string, error) {
-	album, err := postAlbum(rootUrl, album)
+func postAlbumJson(requestConfig RequestConfig, album types.Album) (string, error) {
+	album, err := postAlbum(requestConfig, album)
 
 	if err != nil {
 		return "", err
@@ -66,13 +105,29 @@ func postAlbumJson(rootUrl string, album types.Album) (string, error) {
 	return string(b), nil
 }
 
-func getAlbums(rootUrl string) ([]types.Album, error) {
-	resp, err := http.Get(rootUrl + "/albums")
+func getAlbums(requestConfig RequestConfig) ([]types.Album, error) {
+	request, err := http.NewRequest("GET", requestConfig.RootUrl+"/albums", nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Add("Authorization", requestConfig.SecretKey)
+
+	resp, err := requestConfig.client.Do(request)
 
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var errorMessage types.ErrorMessage
+		err = json.NewDecoder(resp.Body).Decode(&errorMessage)
+
+		if err != nil {
+			return nil, errors.New("error while trying to get albums")
+		}
+		return nil, fmt.Errorf("%s", errorMessage.Error)
+	}
 
 	var target []types.Album
 
@@ -85,8 +140,8 @@ func getAlbums(rootUrl string) ([]types.Album, error) {
 	return target, nil
 }
 
-func getAlbumsJson(rootUrl string) (string, error) {
-	albums, err := getAlbums(rootUrl)
+func getAlbumsJson(requestConfig RequestConfig) (string, error) {
+	albums, err := getAlbums(requestConfig)
 
 	if err != nil {
 		return "", err
@@ -100,8 +155,8 @@ func getAlbumsJson(rootUrl string) (string, error) {
 	return string(b), nil
 }
 
-func getAlbumsCsv(rootUrl string) (string, error) {
-	albums, err := getAlbums(rootUrl)
+func getAlbumsCsv(requestConfig RequestConfig) (string, error) {
+	albums, err := getAlbums(requestConfig)
 	if err != nil {
 		return "", err
 	}
@@ -109,12 +164,7 @@ func getAlbumsCsv(rootUrl string) (string, error) {
 	var csvData bytes.Buffer
 	writer := csv.NewWriter(&csvData)
 
-	header := []string{
-		"ID",
-		"Title",
-		"Artist",
-		"Price",
-	}
+	header := types.AllAlbumKeys
 	writer.Write(header)
 
 	for _, album := range albums {
@@ -139,6 +189,9 @@ func main() {
 	var ofJson bool
 	var ofCSV bool
 
+	// cfg := RequestConfig{RootUrl: URL, SecretKey: "MAGICSTRING"}
+	cfg := RequestConfig{}
+
 	rootCmd := &cobra.Command{
 		Use: "client",
 	}
@@ -146,14 +199,16 @@ func main() {
 		Use:   "list",
 		Short: "list album",
 		Run: func(cmd *cobra.Command, args []string) {
+			// cfg := RequestConfig{RootUrl: URL, SecretKey: "MAGICSTRING"}
+			cfg.UpdateFromEnv()
 
 			var b string
 			var err error
 
 			if ofCSV {
-				b, err = getAlbumsCsv(URL)
+				b, err = getAlbumsCsv(cfg)
 			} else {
-				b, err = getAlbumsJson(URL)
+				b, err = getAlbumsJson(cfg)
 			}
 
 			if err != nil {
@@ -173,7 +228,10 @@ func main() {
 		Use:   "new",
 		Short: "new album",
 		Run: func(cmd *cobra.Command, args []string) {
-			b, err := postAlbumJson(URL, generateNewAlbum())
+			// cfg := RequestConfig{RootUrl: URL, SecretKey: "MAGICSTRING"}
+			cfg.UpdateFromEnv()
+
+			b, err := postAlbumJson(cfg, generateNewAlbum())
 
 			if err != nil {
 				log.Fatal(err)

@@ -69,11 +69,25 @@ func postAlbums(c *gin.Context) {
 	c.IndentedJSON(http.StatusCreated, newAlbum)
 }
 
+func AuthRequired(context *gin.Context) {
+	auth := context.Request.Header.Get("Authorization")
+	if auth != "MAGICSTRING" {
+		context.AbortWithStatusJSON(http.StatusUnauthorized, types.ErrorMessage{Error: "Invalid Authorization header"})
+		return
+	}
+
+	context.Next()
+}
+
 func main() {
 	router := gin.Default()
-	router.GET("/albums", getAlbums)
-	router.GET("/albums/:id", getAlbumByID)
-	router.POST("/albums", postAlbums)
+	authorized := router.Group("/")
+	authorized.Use(AuthRequired)
+	{
+		authorized.GET("/albums", getAlbums)
+		authorized.GET("/albums/:id", getAlbumByID)
+		authorized.POST("/albums", postAlbums)
+	}
 
 	router.Run("localhost:8080")
 }

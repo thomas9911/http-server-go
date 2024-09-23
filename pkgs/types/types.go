@@ -16,6 +16,13 @@ var AllowedAlbumFields = []string{
 	"Price",
 }
 
+var AllAlbumKeys = []string{
+	"ID",
+	"Title",
+	"Artist",
+	"Price",
+}
+
 func (a *Album) GetByField(field string) (string, bool) {
 	switch field {
 	case "ID":
@@ -29,4 +36,8 @@ func (a *Album) GetByField(field string) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+type ErrorMessage struct {
+	Error string `json:"error"`
 }
